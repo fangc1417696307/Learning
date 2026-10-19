@@ -1,5 +1,8 @@
-from fastapi import FastAPI
+import db
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+db.init_db()
 
 app = FastAPI()
 
@@ -23,11 +26,38 @@ def say_hello(name: str):
 
 @app.post("/profile")
 def create_profile(req: ProfileRequest):
+    conn = db.get_conn()
+    cur = conn.cursor()
+
+    cur.execute(
+        "insert into students(name, major, age, goal) values(?,?,?,?)",
+        (req.name, req.major, req.age, req.goal),
+    )
+    new_id = cur.lastrowid
+    conn.commit()
+    conn.close()
     return {
-        "student": req.name,
-        "profile": {
-            "年龄": req.age,
-            "专业": req.major,
-            "学习目标": req.goal,
-        },
+        "id": new_id,
+    }
+
+
+@app.get("/profile/{student_id}")
+def get_profile(student_id: int):
+    conn = db.get_conn()
+    cur = conn.cursor()
+
+    cur.execute(
+        "select id, name, major, age, goal from students where id =?", (student_id,)
+    )
+    row = cur.fetchone()
+    conn.close()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="不存在这个学生")
+    return {
+        "id": row[0],
+        "name": row[1],
+        "major": row[2],
+        "age": row[3],
+        "goal": row[4],
     }
