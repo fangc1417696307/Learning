@@ -26,16 +26,14 @@ def say_hello(name: str):
 
 @app.post("/profile")
 def create_profile(req: ProfileRequest):
-    conn = db.get_conn()
-    cur = conn.cursor()
+    with db.get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "insert into students(name, major, age, goal) values(?,?,?,?)",
+            (req.name, req.major, req.age, req.goal),
+        )
+        new_id = cur.lastrowid
 
-    cur.execute(
-        "insert into students(name, major, age, goal) values(?,?,?,?)",
-        (req.name, req.major, req.age, req.goal),
-    )
-    new_id = cur.lastrowid
-    conn.commit()
-    conn.close()
     return {
         "id": new_id,
     }
@@ -43,14 +41,12 @@ def create_profile(req: ProfileRequest):
 
 @app.get("/profile/{student_id}")
 def get_profile(student_id: int):
-    conn = db.get_conn()
-    cur = conn.cursor()
-
-    cur.execute(
-        "select id, name, major, age, goal from students where id =?", (student_id,)
-    )
-    row = cur.fetchone()
-    conn.close()
+    with db.get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "select id, name, major, age, goal from students where id =?", (student_id,)
+        )
+        row = cur.fetchone()
 
     if row is None:
         raise HTTPException(status_code=404, detail="不存在这个学生")
