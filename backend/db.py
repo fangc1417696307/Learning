@@ -1,6 +1,8 @@
 import sqlite3
 
-DB_PATH = "student.db"
+from config import setting
+
+DB_PATH = setting.db_path
 
 
 def get_conn():
@@ -25,12 +27,12 @@ class DBConnection:
     """用 with 管理的数据库连接。"""
 
     def __init__(self, path):
-        self.path = path       # str，数据库文件路径
-        self.conn = None       # sqlite3.Connection，进入时才创建
+        self.path = path  # str，数据库文件路径
+        self.conn = None  # sqlite3.Connection，进入时才创建
 
     def __enter__(self):
         self.conn = sqlite3.connect(self.path)
-        return self.conn       # ← with ... as conn 拿到的就是它
+        return self.conn  # ← with ... as conn 拿到的就是它
 
     def __exit__(self, exc_type, exc_value, traceback):
         # exc_type 是 None → 没出错；否则就是异常的类型
@@ -40,6 +42,7 @@ class DBConnection:
             self.conn.rollback()
         self.conn.close()
         # 返回 None（假值）→ 异常继续往外抛，不被吞掉
+
 
 def get_db():
     return DBConnection(DB_PATH)
