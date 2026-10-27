@@ -1,0 +1,2395 @@
+openapi: 3.1.0
+info:
+  title: 个性化资源生成与学习多智能体系统 API
+  version: 1.0.0
+  summary: 契约先行版本：22 个目标接口 + 2 个练习期遗留接口
+  description: '本文件的条款与《接口规范文档 V1.0》（docs/文档/接口规范文档.docx）逐条对应，与《数据库设计说明书 V1.0》共用同一套字段命名。
+
+
+    **统一响应体**：所有接口（练习期遗留接口除外）返回 `{code, message, data, request_id}`，结构见各接口的响应定义。业务码 1 表示成功，其余见文档 2.1.2 的编码表。
+
+
+    **鉴权**：除注册、登录与两个练习期接口外，全部要求 `Authorization: Bearer <token>`。
+
+
+    **当前状态**：22 个目标接口均为设计先行（尚未实现），2 个练习期接口已实现并标了 deprecated。前端可先按本文件起 Mock 联调，后端按契约逐个追平。'
+  contact:
+    name: 项目组
+    url: https://127.0.0.1:8001/docs
+  license:
+    name: 课程项目内部使用
+    identifier: LicenseRef-Proprietary
+servers:
+- url: http://127.0.0.1:8001
+  description: 本地开发（uvicorn，端口 8001）
+tags:
+- name: 认证
+  description: 注册、登录、登出、当前用户
+- name: 画像
+  description: 七维画像的读取、人工修正与版本历史
+- name: 对话
+  description: 会话与消息，画像抽取的输入
+- name: 资源生成
+  description: 异步任务：提交、轮询、读资源
+- name: 学习路径
+  description: 路径生成、查询与节点推进
+- name: 推送与反馈
+  description: 推荐列表与行为埋点
+- name: 评估与辅导
+  description: 加分项：效果评估、多模态答疑
+- name: 练习期遗留（待迁移）
+  description: 第 7 课的实现，保留以兼容现有代码
+security:
+- bearerAuth: []
+paths:
+  /api/v1/auth/register:
+    post:
+      tags:
+      - 认证
+      summary: 用户注册
+      operationId: registerUser
+      description: 创建账号。注册成功返回用户 ID，不签发令牌，需再调登录。注册只写 app_user，不预建画像——画像在首次抽取时惰性创建，否则会为每个新用户留下 7 条空维度记录。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: 注册成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    type: 'null'
+                    description: 无返回内容
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/auth/login:
+    post:
+      tags:
+      - 认证
+      summary: 用户登录
+      operationId: login
+      description: 校验账号密码并签发 JWT。连续失败 5 次锁定 15 分钟，返回业务码 600。令牌是无状态 JWT，服务端不保存会话。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    type: object
+                    properties:
+                      access_token:
+                        type: string
+                      token_type:
+                        type: string
+                        example: Bearer
+                      expires_in:
+                        type: integer
+                        description: 有效期，单位秒
+                        example: 7200
+                      user:
+                        $ref: '#/components/schemas/UserBrief'
+                    required:
+                    - access_token
+                    - token_type
+                    - expires_in
+                    - user
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/logout:
+    post:
+      tags:
+      - 认证
+      summary: 退出登录
+      operationId: logout
+      description: 记录登出时间，由客户端丢弃令牌。注意：JWT 无状态，令牌在过期前技术上仍然可用；要立即失效必须引入 jti 吊销表，已列入 V1.1 演进计划。
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    type: 'null'
+                    description: 无返回内容
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/me:
+    get:
+      tags:
+      - 认证
+      summary: 获取当前用户
+      operationId: getCurrentUser
+      description: 返回当前登录用户信息与画像完整度。前端首屏调一次，用它判断是否已登录、是否要引导用户去建画像。
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/UserProfile'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/profile:
+    get:
+      tags:
+      - 画像
+      summary: 查询画像
+      operationId: getProfile
+      description: 返回完整画像（含七个维度）。画像不存在时返回 404，前端据此引导用户进入对话。
+      parameters:
+      - name: with_dimensions
+        in: query
+        required: false
+        description: 是否返回维度明细；false 时只返回摘要与完整度
+        schema:
+          type: boolean
+          default: true
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/Profile'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/profile/dimensions/{dimension_code}:
+    patch:
+      tags:
+      - 画像
+      summary: 修改单个画像维度
+      operationId: updateProfileDimension
+      description: 允许用户纠正某个维度的结论。手动修改同样写 profile_history（source=manual），版本 +1。这是「用户可以否掉 AI 判断」的入口。
+      parameters:
+      - $ref: '#/components/parameters/DimensionCodePath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDimensionRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    type: object
+                    properties:
+                      profile_version:
+                        type: integer
+                        description: 变更后的版本号
+                      dimension:
+                        $ref: '#/components/schemas/Dimension'
+                      updated_at:
+                        type: string
+                        format: date-time
+                    required:
+                    - profile_version
+                    - dimension
+                    - updated_at
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/profile/history:
+    get:
+      tags:
+      - 画像
+      summary: 查询画像变更历史
+      operationId: getProfileHistory
+      description: 分页返回版本变更记录。只返回变更摘要，不返回全量 snapshot_json——体积大且列表页用不到。
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/HistoryPage'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/conversations:
+    post:
+      tags:
+      - 对话
+      summary: 创建会话
+      operationId: createConversation
+      description: 开启一轮对话。scene 决定后续使用哪套 System Prompt：画像构建要引导式提问，辅导要直接答疑。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConversationRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/Conversation'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/conversations/{conversation_id}/messages:
+    get:
+      tags:
+      - 对话
+      summary: 查询消息列表
+      operationId: listMessages
+      description: 按游标分页拉取历史消息。用 before_id 而不是页码：消息会持续追加，offset 翻页在新消息插入后会重复或漏条。
+      parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+      - $ref: '#/components/parameters/BeforeId'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/MessageList'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags:
+      - 对话
+      summary: 发送消息
+      operationId: sendMessage
+      description: 写入用户消息并返回助手回复。auto_extract=true 时同步抽取画像，整个请求约 3~8 秒；超过 30 秒降级为只回消息、抽取转后台任务。
+      parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    type: object
+                    properties:
+                      user_message:
+                        $ref: '#/components/schemas/Message'
+                      assistant_message:
+                        $ref: '#/components/schemas/Message'
+                      profile_updated:
+                        type: boolean
+                        description: 本次是否更新了画像
+                      profile_version:
+                        type:
+                        - integer
+                        - 'null'
+                        description: 未更新为 null
+                    required:
+                    - user_message
+                    - assistant_message
+                    - profile_updated
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/conversations/{conversation_id}/extract:
+    post:
+      tags:
+      - 对话
+      summary: 从对话抽取画像
+      operationId: extractProfile
+      description: 把会话内容压缩成七个维度的画像并落库。首次调用会创建 student_profile 与 7 条维度；之后只更新有变化的维度，版本 +1 并写一条 profile_history。抽取失败不影响会话本身——消息已经落库了。
+      parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtractRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    type: object
+                    properties:
+                      profile_version:
+                        type: integer
+                      dimensions:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Dimension'
+                      created:
+                        type: boolean
+                        description: 是否为首次创建画像
+                    required:
+                    - profile_version
+                    - dimensions
+                    - created
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/v1/resources/tasks:
+    post:
+      tags:
+      - 资源生成
+      summary: 创建资源生成任务
+      operationId: createResourceTask
+      description: 提交生成请求，立即返回 task_id（HTTP 202 表示已受理、结果稍后取）。同一 path_item_id 已有 pending/running 任务时返回 409，避免重复生成烧 token。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+      responses:
+        '202':
+          description: 任务已受理
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    type: object
+                    properties:
+                      task_id:
+                        type: integer
+                      status:
+                        $ref: '#/components/schemas/TaskStatus'
+                      estimated_seconds:
+                        type: integer
+                        description: 预估耗时，供前端提示
+                    required:
+                    - task_id
+                    - status
+                    - estimated_seconds
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/resources/tasks/{task_id}:
+    get:
+      tags:
+      - 资源生成
+      summary: 查询任务状态
+      operationId: getResourceTask
+      description: 轮询任务进度与各智能体执行情况。前端建议 2 秒一次，超过 60 秒降到 5 秒。status=partial 表示部分资源失败，前端应展示已成功的部分而不是整体报错。
+      parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/TaskStatusView'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/resources:
+    get:
+      tags:
+      - 资源生成
+      summary: 查询资源列表
+      operationId: listResources
+      description: 分页筛选当前用户的资源。knowledge_points 在库里是 JSON 字符串，服务层反序列化成数组再返回，前端不必二次解析。
+      parameters:
+      - name: resource_type
+        in: query
+        required: false
+        description: 按类型筛选
+        schema:
+          $ref: '#/components/schemas/ResourceType'
+      - name: keyword
+        in: query
+        required: false
+        description: 标题与摘要模糊匹配
+        schema:
+          type: string
+      - name: task_id
+        in: query
+        required: false
+        description: 按生成任务筛选
+        schema:
+          type: integer
+      - name: difficulty
+        in: query
+        required: false
+        description: 难度筛选
+        schema:
+          $ref: '#/components/schemas/Difficulty'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/ResourcePage'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/resources/{resource_id}:
+    get:
+      tags:
+      - 资源生成
+      summary: 查询资源详情
+      operationId: getResource
+      description: 返回资源全文与生成溯源。只能读自己的资源，否则返回 403。返回 403 而不是 404 是为了便于排查，代价是暴露了「该 ID 存在」；若安全要求更高，统一改成 404。
+      parameters:
+      - $ref: '#/components/parameters/ResourceIdPath'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/Resource'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/paths:
+    post:
+      tags:
+      - 学习路径
+      summary: 生成学习路径
+      operationId: createPath
+      description: 同步生成，约 5~10 秒。已有 active 路径且 force=false 时返回 409。覆盖不删旧数据：旧路径置 abandoned，新路径 version+1，保留演进痕迹。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePathRequest'
+      responses:
+        '201':
+          description: 生成成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    type: object
+                    properties:
+                      path_id:
+                        type: integer
+                      title:
+                        type: string
+                      version:
+                        type: integer
+                      status:
+                        type: string
+                        enum:
+                        - active
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/PathItem'
+                    required:
+                    - path_id
+                    - title
+                    - version
+                    - status
+                    - items
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/paths/current:
+    get:
+      tags:
+      - 学习路径
+      summary: 查询当前路径
+      operationId: getCurrentPath
+      description: 返回进行中路径及其进度。无进行中路径返回 404，前端展示「去生成一条路径」的空状态。
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/PathDetail'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/paths/items/{item_id}:
+    patch:
+      tags:
+      - 学习路径
+      summary: 更新路径节点状态
+      operationId: updatePathItem
+      description: 标记节点的进行状态。status=done 时同步写一条 learning_behavior（action=complete），否则路径进度和行为数据会对不上，评估也拿不到输入。
+      parameters:
+      - $ref: '#/components/parameters/ItemIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePathItemRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    type: object
+                    properties:
+                      path_item_id:
+                        type: integer
+                      status:
+                        $ref: '#/components/schemas/PathItemStatus'
+                      completed_at:
+                        type:
+                        - string
+                        - 'null'
+                        format: date-time
+                      path_progress:
+                        $ref: '#/components/schemas/PathProgress'
+                    required:
+                    - path_item_id
+                    - status
+                    - path_progress
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/recommendations:
+    get:
+      tags:
+      - 推送与反馈
+      summary: 获取推荐资源
+      operationId: listRecommendations
+      description: 只返回 status=pending 的记录，返回后置为 shown，避免同一条反复推。无画像无行为的冷启动走 cold_start 策略，不要报错。
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        description: 条数，上限 50
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 10
+      - name: strategy
+        in: query
+        required: false
+        description: 不传则混合策略
+        schema:
+          $ref: '#/components/schemas/RecommendationStrategy'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/RecommendationList'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/behaviors:
+    post:
+      tags:
+      - 推送与反馈
+      summary: 上报学习行为
+      operationId: createBehavior
+      description: 埋点接口，高频写入。前端应合并上报（如 10 秒一批）并带 Idempotency-Key 请求头去重，否则一次刷新就能刷出十几条重复记录，污染评估数据。
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: false
+        description: 幂等键，重复提交同一键不会产生重复记录
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBehaviorRequest'
+      responses:
+        '201':
+          description: 记录成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    type: object
+                    properties:
+                      behavior_id:
+                        type: integer
+                      created_at:
+                        type: string
+                        format: date-time
+                    required:
+                    - behavior_id
+                    - created_at
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/assessments:
+    post:
+      tags:
+      - 评估与辅导
+      summary: 生成学习效果评估
+      operationId: createAssessment
+      description: 评估完成触发两件事：回写画像（D01/D03）与路径重规划。这条「评估 → 画像 → 路径 → 推送」的闭环是需求 5 的技术落点。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAssessmentRequest'
+      responses:
+        '201':
+          description: 评估完成
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/Assessment'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/tutoring/ask:
+    post:
+      tags:
+      - 评估与辅导
+      summary: 智能辅导提问
+      operationId: askTutor
+      description: 多模态答疑。answer_modes 含 video 时耗时可达数十秒，此时应返回 202 + task_id，前端改用任务接口轮询；answer.mode 表示实际产出的模态，可能低于请求（视频失败降级为文字+图解）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskTutorRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - code
+                - message
+                - data
+                - request_id
+                properties:
+                  code:
+                    type: integer
+                    description: 业务码：1 成功，0 未分类失败，其余见响应编码表
+                    example: 1
+                  message:
+                    type: string
+                    description: 给人看的提示语，成功为 ok
+                    example: ok
+                  data:
+                    $ref: '#/components/schemas/TutoringAnswer'
+                  request_id:
+                    type: string
+                    description: 本次请求的唯一标识，与响应头 X-Request-Id 同值
+                    example: a1b2c3d4e5f6
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /profile:
+    post:
+      tags:
+      - 练习期遗留（待迁移）
+      summary: 写入学生记录（已实现）
+      operationId: createProfileLegacy
+      description: 第 7 课的练习接口，代码在 backend/routers/profile.py。直接返回对象，无统一包装、无鉴权，写入的是 students 表而不是正式模型。V1.1 由 GET /api/v1/profile 取代。
+      deprecated: true
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegacyProfileRequest'
+      responses:
+        '200':
+          description: 创建成功（直接返回对象，无 code/message 包装）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyProfile'
+        '422':
+          description: 参数校验失败（FastAPI 默认结构）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+  /profile/{student_id}:
+    get:
+      tags:
+      - 练习期遗留（待迁移）
+      summary: 按 ID 查询学生记录（已实现）
+      operationId: getProfileLegacy
+      description: 第 7 课的练习接口，无鉴权。注意：改个数字就能读别人的数据，是真实的越权漏洞，第 18 课会堵掉。
+      deprecated: true
+      security: []
+      parameters:
+      - $ref: '#/components/parameters/StudentIdPath'
+      responses:
+        '200':
+          description: 查询成功（直接返回对象）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyProfile'
+        '404':
+          description: 不存在这个学生
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 登录接口返回的 access_token，有效期 2 小时
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 页码，从 1 开始
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      required: false
+      description: 每页条数，上限 100
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    BeforeId:
+      name: before_id
+      in: query
+      required: false
+      description: 游标：返回 message_id 小于该值的消息；不传取最新
+      schema:
+        type: integer
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: 条数
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    ConversationIdPath:
+      name: conversation_id
+      in: path
+      required: true
+      description: 会话 ID
+      schema:
+        type: integer
+    TaskIdPath:
+      name: task_id
+      in: path
+      required: true
+      description: 任务 ID
+      schema:
+        type: integer
+    ResourceIdPath:
+      name: resource_id
+      in: path
+      required: true
+      description: 资源 ID
+      schema:
+        type: integer
+    ItemIdPath:
+      name: item_id
+      in: path
+      required: true
+      description: 路径节点 ID
+      schema:
+        type: integer
+    DimensionCodePath:
+      name: dimension_code
+      in: path
+      required: true
+      description: 维度编码
+      schema:
+        $ref: '#/components/schemas/DimensionCode'
+    StudentIdPath:
+      name: student_id
+      in: path
+      required: true
+      description: 学生 ID（练习期接口）
+      schema:
+        type: integer
+  responses:
+    BadRequest:
+      description: 参数错误：字段缺失、类型不符、枚举越界或业务校验不通过
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Unauthorized:
+      description: 未登录或凭证失效：缺少 Authorization 头、令牌过期或签名无效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: 无权访问：访问了不属于自己的资源
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Conflict:
+      description: 状态冲突：重复提交、任务未结束、已有进行中的路径等
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ServerError:
+      description: 服务器内部错误：data 为 null，详情只写在服务端日志
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    ErrorEnvelope:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: 业务码，非 1
+          example: 400
+        message:
+          type: string
+          description: 可直接展示的中文说明
+          example: 参数错误
+        data:
+          type: 'null'
+          description: 失败时恒为 null
+        request_id:
+          type: string
+          example: a1b2c3d4e5f6
+      required:
+      - code
+      - message
+      - data
+      - request_id
+      description: 失败响应：data 恒为 null，原因写在 message 与 code 里
+    DimensionCode:
+      type: string
+      enum:
+      - D01
+      - D02
+      - D03
+      - D04
+      - D05
+      - D06
+      - D07
+      description: 画像维度编码：D01 知识基础、D02 认知风格、D03 易错点、D04 学习目标、D05 学习节奏、D06 兴趣与动机、D07 资源偏好
+      example: D01
+    Role:
+      type: string
+      enum:
+      - student
+      - teacher
+      - admin
+    ResourceType:
+      type: string
+      enum:
+      - doc
+      - mindmap
+      - exercise
+      - reading
+      - code
+      - video
+      description: 六类资源：讲解文档 / 思维导图 / 练习题 / 拓展阅读 / 代码案例 / 视频动画
+    Difficulty:
+      type: string
+      enum:
+      - easy
+      - medium
+      - hard
+    ConversationScene:
+      type: string
+      enum:
+      - profile_build
+      - tutoring
+      - resource_chat
+      description: 会话场景，决定使用哪套 System Prompt
+    MessageRole:
+      type: string
+      enum:
+      - user
+      - assistant
+      - system
+    TaskStatus:
+      type: string
+      enum:
+      - pending
+      - running
+      - succeeded
+      - partial
+      - failed
+      description: partial 表示部分资源失败，前端应展示已成功的部分
+    AgentRunStatus:
+      type: string
+      enum:
+      - pending
+      - running
+      - succeeded
+      - failed
+      - skipped
+    PathItemStatus:
+      type: string
+      enum:
+      - locked
+      - todo
+      - doing
+      - done
+      - skipped
+    BehaviorAction:
+      type: string
+      enum:
+      - view
+      - play
+      - complete
+      - like
+      - skip
+      - ask
+    RecommendationStrategy:
+      type: string
+      enum:
+      - profile_match
+      - weak_point
+      - path_next
+      - cold_start
+    UserBrief:
+      type: object
+      properties:
+        user_id:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: '2023010101'
+        display_name:
+          type: string
+          example: 清浅
+        role:
+          $ref: '#/components/schemas/Role'
+        profile_completeness:
+          type: number
+          description: 画像完整度 0~1
+          example: 0.43
+      required:
+      - user_id
+      - username
+      - display_name
+      - role
+      - profile_completeness
+    UserProfile:
+      type: object
+      properties:
+        user_id:
+          type: integer
+        username:
+          type: string
+        display_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        major:
+          type:
+          - string
+          - 'null'
+          description: 专业，未填写为 null
+        grade:
+          type:
+          - string
+          - 'null'
+          description: 年级，未填写为 null
+        profile_completeness:
+          type: number
+          description: 0~1
+        profile_version:
+          type:
+          - integer
+          - 'null'
+          description: 无画像时为 null
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - user_id
+      - username
+      - display_name
+      - role
+      - profile_completeness
+      - created_at
+    Dimension:
+      type: object
+      properties:
+        dimension_code:
+          $ref: '#/components/schemas/DimensionCode'
+        dimension_name:
+          type: string
+          example: 知识基础
+        value_text:
+          type: string
+          description: 维度结论，可直接展示的自然语言
+        value_score:
+          type:
+          - number
+          - 'null'
+          description: 0~100，不可量化的维度为 null
+        confidence:
+          type: number
+          description: 0~1，低置信度不参与推荐排序
+        evidence_message_id:
+          type:
+          - integer
+          - 'null'
+          description: 证据消息 ID，可回溯到具体那句话
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - dimension_code
+      - dimension_name
+      - value_text
+      - confidence
+      - updated_at
+    Profile:
+      type: object
+      properties:
+        id:
+          type: integer
+        user_id:
+          type: integer
+        version:
+          type: integer
+          description: 每次维度变更 +1
+          example: 3
+        completeness:
+          type: number
+          description: 已填维度数 / 7
+          example: 0.43
+        summary:
+          type:
+          - string
+          - 'null'
+          description: 画像摘要，可直接拼进 Prompt
+        dimensions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Dimension'
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - user_id
+      - version
+      - completeness
+      - updated_at
+    Conversation:
+      type: object
+      properties:
+        conversation_id:
+          type: integer
+        scene:
+          $ref: '#/components/schemas/ConversationScene'
+        title:
+          type:
+          - string
+          - 'null'
+        status:
+          type: string
+          enum:
+          - active
+          - closed
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - conversation_id
+      - scene
+      - status
+      - created_at
+    Message:
+      type: object
+      properties:
+        message_id:
+          type: integer
+        role:
+          $ref: '#/components/schemas/MessageRole'
+        content:
+          type: string
+        content_type:
+          type: string
+          enum:
+          - text
+          - markdown
+          - json
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - message_id
+      - role
+      - content
+      - content_type
+      - created_at
+    MessageList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        next_before_id:
+          type:
+          - integer
+          - 'null'
+          description: 下一页游标，null 表示没有更多
+      required:
+      - items
+    HistoryEntry:
+      type: object
+      properties:
+        version:
+          type: integer
+        source:
+          type: string
+          enum:
+          - conversation
+          - assessment
+          - manual
+        changed:
+          type: array
+          items:
+            type: object
+            properties:
+              dimension_code:
+                $ref: '#/components/schemas/DimensionCode'
+              from:
+                type:
+                - string
+                - 'null'
+              to:
+                type:
+                - string
+                - 'null'
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - version
+      - source
+      - changed
+      - created_at
+    HistoryPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/HistoryEntry'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+      required:
+      - items
+      - total
+      - page
+      - page_size
+    TaskProgress:
+      type: object
+      properties:
+        total_steps:
+          type: integer
+        finished_steps:
+          type: integer
+        percent:
+          type: integer
+          description: 0~100
+      required:
+      - total_steps
+      - finished_steps
+      - percent
+    AgentRun:
+      type: object
+      properties:
+        agent_code:
+          type: string
+          description: A00~A10，见《数据库设计说明书》3.6
+          example: A02
+        agent_name:
+          type: string
+          example: 讲解文档
+        status:
+          $ref: '#/components/schemas/AgentRunStatus'
+        latency_ms:
+          type:
+          - integer
+          - 'null'
+      required:
+      - agent_code
+      - agent_name
+      - status
+    ResourceRef:
+      type: object
+      properties:
+        resource_id:
+          type: integer
+        resource_type:
+          $ref: '#/components/schemas/ResourceType'
+        title:
+          type: string
+        status:
+          type: string
+          enum:
+          - draft
+          - ready
+          - archived
+      required:
+      - resource_id
+      - resource_type
+      - title
+      - status
+    TaskStatusView:
+      type: object
+      properties:
+        task_id:
+          type: integer
+        task_type:
+          type: string
+          enum:
+          - resource_batch
+          - path_plan
+          - assessment
+          - tutoring
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        progress:
+          $ref: '#/components/schemas/TaskProgress'
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentRun'
+        resources:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceRef'
+        error_message:
+          type:
+          - string
+          - 'null'
+        finished_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+      required:
+      - task_id
+      - task_type
+      - status
+      - progress
+      - agents
+      - resources
+    ResourceBrief:
+      type: object
+      properties:
+        resource_id:
+          type: integer
+        resource_type:
+          $ref: '#/components/schemas/ResourceType'
+        title:
+          type: string
+        summary:
+          type:
+          - string
+          - 'null'
+        difficulty:
+          allOf:
+          - $ref: '#/components/schemas/Difficulty'
+          description: 可为 null
+        knowledge_points:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum:
+          - draft
+          - ready
+          - archived
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - resource_id
+      - resource_type
+      - title
+      - status
+      - created_at
+    ResourcePage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceBrief'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+      required:
+      - items
+      - total
+      - page
+      - page_size
+    Provenance:
+      type: object
+      properties:
+        task_id:
+          type:
+          - integer
+          - 'null'
+        agent_code:
+          type:
+          - string
+          - 'null'
+        agent_name:
+          type:
+          - string
+          - 'null'
+      description: 生成溯源：哪个任务的哪个智能体产出的
+    Resource:
+      type: object
+      properties:
+        resource_id:
+          type: integer
+        resource_type:
+          $ref: '#/components/schemas/ResourceType'
+        title:
+          type: string
+        summary:
+          type:
+          - string
+          - 'null'
+        content_text:
+          type:
+          - string
+          - 'null'
+          description: Markdown 正文
+        content_json:
+          type:
+          - object
+          - 'null'
+          description: 结构化内容：导图节点树、题目数组等
+          additionalProperties: true
+        file_url:
+          type:
+          - string
+          - 'null'
+          description: 视频、图片等静态资源地址
+        difficulty:
+          allOf:
+          - $ref: '#/components/schemas/Difficulty'
+          description: 可为 null
+        knowledge_points:
+          type: array
+          items:
+            type: string
+        profile_version:
+          type:
+          - integer
+          - 'null'
+          description: 生成时使用的画像版本
+        status:
+          type: string
+          enum:
+          - draft
+          - ready
+          - archived
+        provenance:
+          $ref: '#/components/schemas/Provenance'
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - resource_id
+      - resource_type
+      - title
+      - knowledge_points
+      - status
+      - created_at
+    PathItem:
+      type: object
+      properties:
+        path_item_id:
+          type: integer
+        seq:
+          type: integer
+          description: 从 1 开始
+        title:
+          type: string
+        objective:
+          type:
+          - string
+          - 'null'
+        item_type:
+          type: string
+          enum:
+          - study
+          - practice
+          - review
+        resource_id:
+          type:
+          - integer
+          - 'null'
+          description: 可为空：资源还没生成
+        status:
+          $ref: '#/components/schemas/PathItemStatus'
+        estimated_minutes:
+          type:
+          - integer
+          - 'null'
+      required:
+      - path_item_id
+      - seq
+      - title
+      - item_type
+      - status
+    PathProgress:
+      type: object
+      properties:
+        total:
+          type: integer
+        done:
+          type: integer
+        percent:
+          type: integer
+      required:
+      - total
+      - done
+      - percent
+    PathBrief:
+      type: object
+      properties:
+        path_id:
+          type: integer
+        title:
+          type: string
+        goal:
+          type:
+          - string
+          - 'null'
+        version:
+          type: integer
+        status:
+          type: string
+          enum:
+          - draft
+          - active
+          - completed
+          - abandoned
+      required:
+      - path_id
+      - title
+      - version
+      - status
+    PathDetail:
+      type: object
+      properties:
+        path:
+          $ref: '#/components/schemas/PathBrief'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathItem'
+        progress:
+          $ref: '#/components/schemas/PathProgress'
+      required:
+      - path
+      - items
+      - progress
+    Recommendation:
+      type: object
+      properties:
+        recommendation_id:
+          type: integer
+        resource_id:
+          type: integer
+        title:
+          type: string
+        resource_type:
+          $ref: '#/components/schemas/ResourceType'
+        score:
+          type: number
+          description: 匹配分 0~1
+        reason:
+          type:
+          - string
+          - 'null'
+          description: 推给用户的理由，前端直接展示
+        strategy:
+          $ref: '#/components/schemas/RecommendationStrategy'
+      required:
+      - recommendation_id
+      - resource_id
+      - title
+      - resource_type
+      - score
+      - strategy
+    RecommendationList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Recommendation'
+      required:
+      - items
+    AssessmentDimension:
+      type: object
+      properties:
+        dimension_code:
+          $ref: '#/components/schemas/DimensionCode'
+        dimension_name:
+          type: string
+        score:
+          type:
+          - number
+          - 'null'
+          description: 0~100
+        comment:
+          type:
+          - string
+          - 'null'
+      required:
+      - dimension_code
+      - dimension_name
+    Assessment:
+      type: object
+      properties:
+        assessment_id:
+          type: integer
+        score:
+          type:
+          - number
+          - 'null'
+          description: 综合得分 0~100
+        dimensions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssessmentDimension'
+        feedback_text:
+          type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+        profile_updates:
+          type: integer
+          description: 本次回写的画像维度数
+      required:
+      - assessment_id
+      - dimensions
+      - feedback_text
+      - suggestions
+      - profile_updates
+    Citation:
+      type: object
+      properties:
+        resource_id:
+          type: integer
+        title:
+          type: string
+      required:
+      - resource_id
+      - title
+    TutoringAnswer:
+      type: object
+      properties:
+        conversation_id:
+          type: integer
+        message_id:
+          type: integer
+        answer:
+          type: object
+          properties:
+            text:
+              type: string
+            mode:
+              type: string
+              enum:
+              - text
+              - diagram
+              - video
+              description: 实际产出的模态
+            media_url:
+              type:
+              - string
+              - 'null'
+            citations:
+              type: array
+              items:
+                $ref: '#/components/schemas/Citation'
+          required:
+          - text
+          - mode
+        followups:
+          type: array
+          items:
+            type: string
+      required:
+      - conversation_id
+      - message_id
+      - answer
+    RegisterRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          description: 登录名，4~64 字符，学号或邮箱
+          minLength: 4
+          maxLength: 64
+        password:
+          type: string
+          description: 8~64 字符，服务端加盐哈希后存储
+          minLength: 8
+          maxLength: 64
+          format: password
+        display_name:
+          type: string
+          description: 2~32 字符，缺省取 username
+          minLength: 2
+          maxLength: 32
+        major:
+          type: string
+          description: 专业，作为维度 D01 的初始线索
+        grade:
+          type: string
+          description: 年级，如 2023
+      required:
+      - username
+      - password
+    LoginRequest:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+      required:
+      - username
+      - password
+    UpdateDimensionRequest:
+      type: object
+      properties:
+        value_text:
+          type: string
+          description: 维度结论，1~1000 字
+          minLength: 1
+          maxLength: 1000
+        value_score:
+          type: number
+          description: 0~100，不可量化时省略
+          minimum: 0
+          maximum: 100
+        confidence:
+          type: number
+          description: 0~1，默认 0.5
+          minimum: 0
+          maximum: 1
+      required:
+      - value_text
+    CreateConversationRequest:
+      type: object
+      properties:
+        scene:
+          $ref: '#/components/schemas/ConversationScene'
+        title:
+          type: string
+          description: 缺省取首条消息前 30 字
+          maxLength: 100
+    SendMessageRequest:
+      type: object
+      properties:
+        content:
+          type: string
+          description: 消息正文，1~4000 字
+          minLength: 1
+          maxLength: 4000
+        auto_extract:
+          type: boolean
+          description: 是否同步抽取画像，默认 false；开启后响应变慢
+          default: false
+      required:
+      - content
+    ExtractRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          description: 为 true 时忽略「消息未变化」的短路判断
+          default: false
+    CreateTaskRequest:
+      type: object
+      properties:
+        resource_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceType'
+          description: 至少 1 个
+        knowledge_points:
+          type: array
+          items:
+            type: string
+          description: 缺省时由画像 D01/D03 推导
+        difficulty:
+          $ref: '#/components/schemas/Difficulty'
+        extra_instruction:
+          type: string
+          description: 补充要求
+          maxLength: 1000
+        path_item_id:
+          type: integer
+          description: 关联路径节点，生成成功后回填 path_item.resource_id
+      required:
+      - resource_types
+    CreatePathRequest:
+      type: object
+      properties:
+        goal:
+          type: string
+          description: 缺省取画像 D04
+        duration_days:
+          type: integer
+          description: 7~90，默认 30
+          minimum: 7
+          maximum: 90
+          default: 30
+        include_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceType'
+          description: 限制节点关联的资源类型
+        force:
+          type: boolean
+          description: 已有进行中路径时是否覆盖，默认 false
+          default: false
+    UpdatePathItemRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - doing
+          - done
+          - skipped
+        note:
+          type: string
+          description: 完成备注
+          maxLength: 500
+      required:
+      - status
+    CreateBehaviorRequest:
+      type: object
+      properties:
+        resource_id:
+          type: integer
+          description: 与 path_item_id 至少给一个
+        path_item_id:
+          type: integer
+        action:
+          $ref: '#/components/schemas/BehaviorAction'
+        duration_seconds:
+          type: integer
+          description: 默认 0
+          minimum: 0
+          default: 0
+        payload:
+          type: object
+          description: 附加信息：进度、得分等
+          additionalProperties: true
+      required:
+      - action
+    CreateAssessmentRequest:
+      type: object
+      properties:
+        path_id:
+          type: integer
+          description: 缺省取当前 active 路径
+        answers:
+          type: array
+          items:
+            type: object
+            properties:
+              question_id:
+                type: integer
+              answer:
+                type: string
+              correct:
+                type: boolean
+            required:
+            - question_id
+        self_report:
+          type: object
+          description: 自评：难度感受、耗时、信心度
+          additionalProperties: true
+    AskTutorRequest:
+      type: object
+      properties:
+        question:
+          type: string
+          description: 最大 2000 字
+          maxLength: 2000
+        resource_id:
+          type: integer
+          description: 针对哪个资源提问，用于取上下文
+        answer_modes:
+          type: array
+          items:
+            type: string
+            enum:
+            - text
+            - diagram
+            - video
+          description: 默认 [text]
+        conversation_id:
+          type: integer
+          description: 多轮追问时带上
+      required:
+      - question
+    LegacyProfileRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        major:
+          type: string
+        age:
+          type: integer
+          default: 0
+        goal:
+          type: string
+          default: 未填写
+      required:
+      - name
+      - major
+    LegacyProfile:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        major:
+          type: string
+        age:
+          type: integer
+        goal:
+          type: string
+      required:
+      - id
+      - name
+      - major
+      - age
+      - goal
